@@ -1,30 +1,79 @@
-version: '3.8'
+# ============================================================
+# Docker Compose：用一個檔案管理多個容器
+# 原本要分別下 docker network create / docker volume create / docker run ...
+# 現在只要 docker compose up -d 就能一次啟動
+#
+# 常用指令（要在這個檔案所在的資料夾執行）：
+#   docker compose up -d          啟動全部服務（-d 是背景執行）
+#   docker compose up -d --build  改了程式碼或 dockerfile 後，重新 build 再啟動
+#   docker compose down           停止並移除容器、網路（具名 volume 會保留）
+#   docker compose down -v        連 volume 一起刪掉（資料庫資料會消失）
+#   docker compose ps             看這個 compose 的服務狀態
+#   docker compose logs -f        追蹤 log（可在後面加服務名稱，例如 node-app）
+#   docker compose config         檢查語法，並顯示環境變數帶入後的結果
+#
+# 舊版要在最上面寫 version: '3.8'，新版 Compose 已經不需要
+# ============================================================
 
-services:
+services: # 每一個 service 就是一個容器
+
+  # ---------- MongoDB 資料庫 ----------
+  # 服務名稱「my-mongodb」同時也是 Docker 網路裡的主機名稱（DNS name）
+  # 其他容器要連它，就是用 mongodb://my-mongodb:27017
   my-mongodb:
-    image: mongo:latest
-    container_name: my-mongodb
-    volumes:
+    image: mongo:latest # 直接用 Docker Hub 上現成的 image
+    container_name: my-mongodb # 指定容器名稱，不寫的話會是「資料夾名-服務名-1」
+    volumes: # 相當於 docker run 的 -v
+      # 具名 volume（由 Docker 管理）：<volume 名稱>:<容器內路徑>
+      # /data/db 是 mongo 存資料的位置（可在 Docker Hub 的 mongo 說明頁查到）
+      # 有掛 volume，容器刪掉重建後資料還在
       - mongodbdata:/data/db
-    networks:
+    networks: # 相當於 docker run 的 --network
       - my-network
+    # 這裡沒有寫 ports，所以 27017 只在 Docker 網路內部可以連
+    # 如果想從本機（例如 MongoDB Compass）連進來，要加：
+    # ports:
+    #   - "27017:27017"
 
+  # ---------- Node.js (Express) 應用程式 ----------
   node-app:
-    image: casper723/2024-node-course-express-mongo
+    # build：用本機的 dockerfile 自己打包 image
+    # 如果要改用現成的 image，就把 build 換成 image: <image 名稱>
+    build:
+      context: . # build 的基準路徑（. 代表這個檔案所在的資料夾）
+      dockerfile: dockerfile # 要使用的 Dockerfile 檔名
     container_name: node-app
-    ports:
+    ports: # 相當於 docker run 的 -p
+      # "<本機 port>:<容器 port>"，瀏覽器開 http://localhost:3000
       - "3000:3000"
-    environment:
+    environment: # 相當於 docker run 的 -e
+      # <容器內的環境變數名稱>: ${<.env 裡的變數名稱>}
+      # Compose 會自動讀取同資料夾的 .env，把 ${COMPOSE_DB_URL} 換成實際的值
+      # 容器內 localhost 指的是容器自己，所以連資料庫要用服務名稱 my-mongodb
       MONGODB_URL: ${COMPOSE_DB_URL}
-      # - MONGODB_URL=mongodb://my-mongodb/mydatabase
+    volumes:
+      # Bind Mount（綁定本機路徑）：<本機路徑>:<容器內路徑>
+      # 以 ./ 或 / 開頭代表本機路徑；只寫名稱（如上面的 mongodbdata）則是具名 volume
+      # 兩邊是同一份檔案，容器寫入 dist/text.txt，本機的 dist 資料夾馬上看得到
+      - ./dist:/usr/local/app/dist
     depends_on:
+      # 啟動順序：先啟動 my-mongodb，再啟動 node-app
+      # 注意：只保證「容器已啟動」，不保證資料庫已經可以連線
       - my-mongodb
     networks:
+      # 兩個服務要在同一個網路，才能用服務名稱互相連線
       - my-network
 
+# ---------- Volume 宣告 ----------
+# 相當於 docker volume create
+# services 裡用到的具名 volume 都要在這裡宣告
+# 實際建立的名稱會加上專案名稱前綴：docker-express-sample-mongo_mongodbdata
 volumes:
   mongodbdata:
 
+# ---------- Network 宣告 ----------
+# 相當於 docker network create
+# 實際建立的名稱同樣會加前綴：docker-express-sample-mongo_my-network
 networks:
   my-network:
-    driver: bridge
+    driver: bridge # bridge 是預設的網路類型，同一個 bridge 網路內的容器可以互連
